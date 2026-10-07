@@ -1,0 +1,7 @@
+- id: llm-sunset
+  name: llm-sunset (deprecated AI models)
+  description: Block commits that use retired or soon-to-retire AI model IDs.
+  entry: llm-sunset scan
+  language: python
+  pass_filenames: true
+  types: [text]

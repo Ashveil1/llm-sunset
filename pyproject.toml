@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-sunset"
+dynamic = ["version"]
+description = "Find AI model IDs in your code that are deprecated or about to be shut down (OpenAI, Anthropic, Gemini, Azure, Groq, Cohere, xAI)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [{ name = "llm-sunset contributors" }]
+keywords = ["llm", "openai", "anthropic", "gemini", "deprecation", "linter", "ci", "ai", "model-retirement"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+llm-sunset = "llm_sunset.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Ashveil1/llm-sunset"
+Issues = "https://github.com/Ashveil1/llm-sunset/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "llm_sunset.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+llm_sunset = ["snapshot.json"]

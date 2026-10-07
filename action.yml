@@ -1,0 +1,42 @@
+name: "llm-sunset"
+description: "Fail CI when your code uses AI models (OpenAI, Anthropic, Gemini, Azure...) that are retired or about to be."
+author: "llm-sunset contributors"
+branding:
+  icon: "sunset"
+  color: "orange"
+
+inputs:
+  paths:
+    description: "Space-separated paths to scan"
+    default: "."
+  fail-within:
+    description: "Fail if a model retires within this many days"
+    default: "90"
+  provider:
+    description: "Space-separated providers to check (e.g. 'openai anthropic'). Empty = all."
+    default: ""
+  exclude:
+    description: "Space-separated globs to exclude"
+    default: ""
+  fail:
+    description: "Set to 'false' to report without failing the build"
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/src
+        IN_PATHS: ${{ inputs.paths }}
+        IN_FAIL_WITHIN: ${{ inputs.fail-within }}
+        IN_PROVIDER: ${{ inputs.provider }}
+        IN_EXCLUDE: ${{ inputs.exclude }}
+        IN_FAIL: ${{ inputs.fail }}
+      run: |
+        args=(scan --format github --fail-within "$IN_FAIL_WITHIN")
+        for p in $IN_PROVIDER; do args+=(--provider "$p"); done
+        for e in $IN_EXCLUDE; do args+=(--exclude "$e"); done
+        [ "$IN_FAIL" = "false" ] && args+=(--no-fail)
+        read -ra paths <<< "$IN_PATHS"
+        python3 -m llm_sunset "${args[@]}" "${paths[@]}"

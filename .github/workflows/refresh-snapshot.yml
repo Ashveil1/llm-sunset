@@ -1,0 +1,21 @@
+name: refresh snapshot
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/refresh_snapshot.py
+      - run: |
+          if git diff --quiet; then echo "no changes"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: refresh bundled deprecation snapshot"
+          git push

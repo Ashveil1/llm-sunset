@@ -1,0 +1,16 @@
+name: release
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write # PyPI trusted publishing: no API token/secret needed
+  contents: read
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx run build
+      - uses: pypa/gh-action-pypi-publish@release/v1
