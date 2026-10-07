@@ -20,7 +20,7 @@ worker/.env:2:7        warning Anthropic model 'claude-sonnet-4-5-20250929' reti
 - **Works offline.** Ships with a bundled snapshot; uses live data when it can reach it.
 - **No API keys, and your code never leaves your machine.** It only downloads a public JSON file.
 - **CI-ready.** Comes with a GitHub Action, a pre-commit hook, SARIF output for GitHub code scanning, JSON and Markdown.
-- **Low noise.** It matches exact model IDs (so `gpt-4o-mini` is not reported as `gpt-4o`, and `gpt-4.1` is not reported as `gpt-4`) and skips prose docs, lockfiles and `node_modules`.
+- **Low noise.** It matches exact model IDs (so `gpt-4o-mini` is not reported as `gpt-4o`, and `gpt-4.1` is not reported as `gpt-4`). Generic one-word IDs (`command`, `ada`, `whisper`, `davinci`…) only count next to model context — a `model:`/`engine=` key, a provider or SDK name, or a `provider/` prefix — so everyday words like the `"command"` key in MCP configs don't trigger it. Dot-directories (`.zcode/`, `.qwen/`…), logs (`*.log`, `*.jsonl`), lockfiles and `node_modules` are skipped, and `.gitignore` is respected.
 
 ## Install
 
@@ -42,7 +42,7 @@ llm-sunset upcoming --days 90       # every shutdown in the next 90 days
 
 **Exit code** is `1` if any model is already retired or retires within `--fail-within` days (default 90). Use `--no-fail` to only report.
 
-**Ignoring things:** put `llm-sunset: ignore` in a comment on a line, or `llm-sunset: ignore-file` anywhere in a file. Use `--exclude 'tests/*'` for paths. Markdown/RST/TXT files are skipped unless you pass `--include-docs`.
+**Ignoring things:** put `llm-sunset: ignore` in a comment on a line, or `llm-sunset: ignore-file` anywhere in a file. Use `--exclude 'tests/*'` for paths. Markdown/RST/TXT files are skipped unless you pass `--include-docs`. Files ignored by `.gitignore` are skipped unless you pass `--no-gitignore`.
 
 **Azure, Vertex AI and Bedrock** publish their own retirement dates for models they resell, which often differ from the original provider's dates. To avoid false alarms these are off by default. Turn them on with `--provider azure` or `--provider all`.
 
@@ -66,6 +66,7 @@ jobs:
           fail-within: 60          # optional
           # provider: "openai anthropic"
           # exclude: "tests/*"
+          # gitignore: "false"     # scan git-ignored files too
 ```
 
 Findings appear as inline annotations on the PR, along with a summary table on the run page.

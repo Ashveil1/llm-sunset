@@ -19,6 +19,9 @@ RAW = [
      "replacement_models": ["gpt-5"], "url": "https://example.com/a", "last_observed": "2026-10-01"},
     {"provider": "OpenAI", "model_id": "davinci", "shutdown_date": "2024-01-04",
      "replacement_models": ["davinci-002"], "last_observed": "2024-01-01"},
+    {"provider": "OpenAI", "model_id": "ada", "shutdown_date": "2024-01-04", "last_observed": "2024-01-01"},
+    {"provider": "Cohere", "model_id": "command", "shutdown_date": None, "last_observed": "2026-01-01"},
+    {"provider": "Cohere", "model_id": "command-r", "shutdown_date": None, "last_observed": "2026-01-01"},
     {"provider": "Anthropic", "model_id": "claude-2.0", "shutdown_date": "2025-07-21", "last_observed": "2025-07-01"},
     {"provider": "Azure", "model_id": "gpt-4o", "shutdown_date": "2027-06-01", "last_observed": "2026-10-01"},
     {"provider": "Google", "model_id": "gemini-1.0-pro", "shutdown_date": None, "last_observed": "2025-01-01"},
@@ -69,6 +72,47 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(self.hits("# Charles Babbage and davinci were smart"), [])
         self.assertEqual(self.hits("engine = 'davinci'"), [("davinci", ["OpenAI"])])
 
+    def test_risky_ids_from_issue(self):
+        # https://github.com/Ashveil1/llm-sunset FP report: "command" is the
+        # standard MCP-server key, "ada" is often just a variable name.
+        hits = lambda s: [t for _, t, _ in matcher().match_line(s)]  # noqa: E731
+        # JSON/YAML mapping keys are never model refs ...
+        self.assertEqual(hits('{"command": "uvx mcp-server"}'), [])
+        self.assertEqual(hits('"command": "npx foo"'), [])
+        self.assertEqual(hits('command: foo'), [])
+        # ... but values next to a model key are.
+        self.assertEqual(hits('{"model": "command"}'), ["command"])
+        self.assertEqual(hits('model: command'), ["command"])
+        self.assertEqual(hits('MODEL=command'), ["command"])
+        self.assertEqual(hits('cohere.create(model="command-r")'), ["command-r"])
+        # bare words without any model context stay silent ...
+        self.assertEqual(hits('x = "ada"'), [])
+        self.assertEqual(hits('x = "command"'), [])
+        # ... and gain a voice with model context.
+        self.assertEqual(hits('model = "ada"'), ["ada"])
+        self.assertEqual(hits('openai.engine = "ada"'), ["ada"])
+        # distinctive hyphenated IDs still match anywhere.
+        self.assertEqual(hits('x = "command-r"'), ["command-r"])
+        self.assertEqual(hits('x = "gpt-4o-2024-05-13"'), ["gpt-4o-2024-05-13"])
+        # prose that merely contains "deployment" is not model context ...
+        self.assertEqual(hits('suite: test deployment command, args, and labels'), [])
+        # ... including docstrings that mention "models" ...
+        self.assertEqual(hits('"""Test the models list command with JSON output"""'), [])
+        # ... and prose about "/slash commands".
+        self.assertEqual(hits('use the /bashes command to check output'), [])
+        # ... but a real mapping value is.
+        self.assertEqual(hits('deployment: command'), ["command"])
+        self.assertEqual(hits('MODEL_NAME=command'), ["command"])
+        # provider words inside file paths don't count as context ...
+        trace_line = '"stringValue": "[{\\"type\\":\\"command\\"}]" /workspace/.claude/x'
+        self.assertEqual(hits(trace_line), [])
+        # ... while a real provider prefix does.
+        self.assertEqual(hits('"openai/command"'), ["command"])
+        # tokenizer vocabs / mapping keys stay silent even when the same
+        # line mentions "model" (single-line JSON).
+        self.assertEqual(hits('{"command":2339,"model":1234}'), [])
+        self.assertEqual(hits('{"model": "command"}'), ["command"])
+
     def test_provider_filter(self):
         self.assertEqual(self.hits("model: gpt-4o", providers=["openai"]), [])
         self.assertEqual(self.hits("MODEL=claude-2.0", providers=["openai"]), [])
@@ -85,7 +129,8 @@ class ScanTests(unittest.TestCase):
         (root / "app.py").write_text(
             'a = "gpt-4o-2024-05-13"\n'
             'b = "claude-2.0"  # llm-sunset: ignore\n'
-            'c = "davinci"\n'
+            'model = "davinci"\n'  # generic-word IDs need model context
+            'c = "davinci"\n'  # ... so this bare one stays silent
         )
         (root / "README.md").write_text("we used gpt-4o-2024-05-13\n")
         (root / "node_modules").mkdir()
@@ -139,6 +184,43 @@ class ScanTests(unittest.TestCase):
         code, out = self.run_cli("upcoming", "--days", "30")
         self.assertIn("gpt-4o-2024-05-13", out)
         self.assertNotIn("2027-06-01", out)
+
+    def test_skips_dot_dirs_logs_and_jsonl(self):
+        m = matcher()
+        zcode = self.root / ".zcode" / "cli"
+        zcode.mkdir(parents=True)
+        (zcode / "config.json").write_text('{"model": "gpt-4o-2024-05-13"}\n')
+        (self.root / ".qwen").mkdir()
+        (self.root / ".qwen" / "tmp.py").write_text('a = "gpt-4o-2024-05-13"\n')
+        (self.root / "debug.log").write_text('model="gpt-4o-2024-05-13"\n')
+        (self.root / "events.jsonl").write_text('{"model": "gpt-4o-2024-05-13"}\n')
+        (self.root / ".mcp.json").write_text('{"mcpServers": {"x": {"command": "uvx"}}}\n')
+        found = scan([str(self.root)], m)
+        names = {Path(f.path).name for f in found}
+        self.assertNotIn("config.json", names)
+        self.assertNotIn("tmp.py", names)
+        self.assertNotIn("debug.log", names)
+        self.assertNotIn("events.jsonl", names)
+        self.assertNotIn(".mcp.json", names)  # "command" key, no model context
+        self.assertIn("app.py", names)  # real source still scanned
+
+    def test_gitignore_respected(self):
+        import shutil
+        import subprocess
+        if not shutil.which("git"):
+            self.skipTest("git not available")
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "kept.py").write_text('a = "gpt-4o-2024-05-13"\n')
+        (root / "ignored.py").write_text('a = "gpt-4o-2024-05-13"\n')
+        (root / ".gitignore").write_text("ignored.py\n")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        m = matcher()
+        self.assertEqual([Path(f.path).name for f in scan([str(root)], m)], ["kept.py"])
+        self.assertEqual(
+            sorted(Path(f.path).name for f in scan([str(root)], m, use_gitignore=False)),
+            ["ignored.py", "kept.py"],
+        )
 
 
 class SnapshotTests(unittest.TestCase):

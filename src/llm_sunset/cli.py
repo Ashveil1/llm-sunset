@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-fail", action="store_true", help="always exit 0")
     s.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="exclude paths (repeatable)")
     s.add_argument("--include-docs", action="store_true", help="also scan .md/.rst/.txt files")
+    s.add_argument("--no-gitignore", dest="gitignore", action="store_false", default=True,
+                   help="do not respect .gitignore (by default, ignored files are skipped)")
     _common(s)
 
     i = sub.add_parser("info", help="show deprecation info for model IDs")
@@ -74,7 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_scan(a: argparse.Namespace) -> int:
     today = _today(a.today)
     deps, source = load(offline=a.offline, data_file=a.data_file)
-    findings = scan(a.paths, Matcher(deps, a.provider), exclude=a.exclude, include_docs=a.include_docs)
+    findings = scan(a.paths, Matcher(deps, a.provider), exclude=a.exclude, include_docs=a.include_docs,
+                  use_gitignore=a.gitignore)
     if a.warn_within >= 0:
         findings = [
             f for f in findings

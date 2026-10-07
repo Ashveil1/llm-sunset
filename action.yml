@@ -21,6 +21,9 @@ inputs:
   fail:
     description: "Set to 'false' to report without failing the build"
     default: "true"
+  gitignore:
+    description: "Set to 'false' to also scan files ignored by .gitignore"
+    default: "true"
 
 runs:
   using: "composite"
@@ -33,10 +36,12 @@ runs:
         IN_PROVIDER: ${{ inputs.provider }}
         IN_EXCLUDE: ${{ inputs.exclude }}
         IN_FAIL: ${{ inputs.fail }}
+        IN_GITIGNORE: ${{ inputs.gitignore }}
       run: |
         args=(scan --format github --fail-within "$IN_FAIL_WITHIN")
         for p in $IN_PROVIDER; do args+=(--provider "$p"); done
         for e in $IN_EXCLUDE; do args+=(--exclude "$e"); done
         [ "$IN_FAIL" = "false" ] && args+=(--no-fail)
+        [ "$IN_GITIGNORE" = "false" ] && args+=(--no-gitignore)
         read -ra paths <<< "$IN_PATHS"
         python3 -m llm_sunset "${args[@]}" "${paths[@]}"
