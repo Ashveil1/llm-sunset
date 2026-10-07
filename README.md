@@ -35,14 +35,33 @@ llm-sunset                          # scan current directory
 llm-sunset src/ config/             # scan specific paths
 llm-sunset --provider openai        # only OpenAI notices (repeatable)
 llm-sunset --fail-within 30         # only fail on models retiring within 30 days
+llm-sunset --group-by file          # group output by file instead of by model
 llm-sunset --format json            # also: markdown, sarif, github
 llm-sunset info gpt-4o-2024-05-13   # look up a model
 llm-sunset upcoming --days 90       # every shutdown in the next 90 days
+llm-sunset fix --dry-run            # preview rewrites of deprecated model IDs
+llm-sunset fix --replace OLD=NEW    # rewrite, picking the replacement yourself
+llm-sunset baseline --write .llm-sunset-baseline.json   # record current findings
+llm-sunset --baseline .llm-sunset-baseline.json         # only report new ones
 ```
 
 **Exit code** is `1` if any model is already retired or retires within `--fail-within` days (default 90). Use `--no-fail` to only report.
 
-**Ignoring things:** put `llm-sunset: ignore` in a comment on a line, or `llm-sunset: ignore-file` anywhere in a file. Use `--exclude 'tests/*'` for paths. Markdown/RST/TXT files are skipped unless you pass `--include-docs`. Files ignored by `.gitignore` are skipped unless you pass `--no-gitignore`.
+**Ignoring things:** put `llm-sunset: ignore` in a comment on a line, or `llm-sunset: ignore-file` anywhere in a file. Use `--exclude 'tests/*'` for paths. Markdown/RST/TXT files are skipped unless you pass `--include-docs`. Files ignored by `.gitignore` are skipped unless you pass `--no-gitignore`. Editor history/cache directories, backups (`*.bak`, `*.save`, …), logs and lockfiles are skipped unless you pass `--no-default-excludes`; hidden directories are skipped unless you pass `--include-hidden`.
+
+**Config file:** permanent settings live in `.llm-sunset.toml` (or a `[tool.llm-sunset]` section in `pyproject.toml`):
+
+```toml
+exclude = ["tests/*"]
+providers = ["openai", "anthropic"]
+fail_within = 60
+```
+
+CLI flags override the file; `exclude` lists are combined.
+
+**Auto-fix:** `llm-sunset fix` rewrites deprecated IDs to the provider's suggested replacement (or your `--replace OLD=NEW` pick). Always preview with `--dry-run` first — replacements are provider suggestions, not guaranteed drop-in equivalents. Medium-confidence matches (generic words like `command`) are skipped unless you pass `--include-risky`.
+
+**JSON output** is agent-friendly: every finding carries its `line_text`, a `confidence` level (`high` for distinctive IDs, `medium` for generic words matched via context), the `replacements` list and a `replacement_note`.
 
 **Azure, Vertex AI and Bedrock** publish their own retirement dates for models they resell, which often differ from the original provider's dates. To avoid false alarms these are off by default. Turn them on with `--provider azure` or `--provider all`.
 

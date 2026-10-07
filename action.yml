@@ -24,6 +24,9 @@ inputs:
   gitignore:
     description: "Set to 'false' to also scan files ignored by .gitignore"
     default: "true"
+  baseline:
+    description: "Path to a baseline file; only findings not recorded in it are reported"
+    default: ""
 
 runs:
   using: "composite"
@@ -37,11 +40,13 @@ runs:
         IN_EXCLUDE: ${{ inputs.exclude }}
         IN_FAIL: ${{ inputs.fail }}
         IN_GITIGNORE: ${{ inputs.gitignore }}
+        IN_BASELINE: ${{ inputs.baseline }}
       run: |
         args=(scan --format github --fail-within "$IN_FAIL_WITHIN")
         for p in $IN_PROVIDER; do args+=(--provider "$p"); done
         for e in $IN_EXCLUDE; do args+=(--exclude "$e"); done
         [ "$IN_FAIL" = "false" ] && args+=(--no-fail)
         [ "$IN_GITIGNORE" = "false" ] && args+=(--no-gitignore)
+        [ -n "$IN_BASELINE" ] && args+=(--baseline "$IN_BASELINE")
         read -ra paths <<< "$IN_PATHS"
         python3 -m llm_sunset "${args[@]}" "${paths[@]}"

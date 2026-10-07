@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -112,6 +113,20 @@ class MatchTests(unittest.TestCase):
         # line mentions "model" (single-line JSON).
         self.assertEqual(hits('{"command":2339,"model":1234}'), [])
         self.assertEqual(hits('{"model": "command"}'), ["command"])
+        # .claude.json style: minified line where "model" belongs to an
+        # unrelated setting and "command" is a hook type, not a model.
+        claude_line = ('{"mcpServers": {"fetch": {"command": "npx"}}, '
+                       '"model": "claude-4", "hooks": [{"type": "command", '
+                       '"command": "/home/u/.claude/hooks/x.sh"}]}')
+        self.assertEqual(hits(claude_line), [])
+        # JSON-in-JSON: an escaped inner key is still a key ...
+        self.assertEqual(hits(r'"config": "{\"command\": \"npx\"}"'), [])
+        # ... but an escaped inner model value still counts.
+        self.assertEqual(hits(r'"a": "{\"model\": \"command\"}"'), ["command"])
+        # provider context after the match does not count ...
+        self.assertEqual(hits('parametrize("command", ["claude", "pi"])'), [])
+        # ... but provider context before it does.
+        self.assertEqual(hits('cohere_client.generate("command")'), ["command"])
 
     def test_provider_filter(self):
         self.assertEqual(self.hits("model: gpt-4o", providers=["openai"]), [])
@@ -172,10 +187,22 @@ class ScanTests(unittest.TestCase):
         code, out = self.run_cli(str(self.root), "--format", "json", "--no-fail")
         self.assertEqual(code, 0)
         self.assertEqual(len(json.loads(out)["findings"]), 2)
+        by_match = {f["match"]: f for f in json.loads(out)["findings"]}
+        self.assertEqual(by_match["gpt-4o-2024-05-13"]["line_text"], 'a = "gpt-4o-2024-05-13"')
+        self.assertEqual(by_match["gpt-4o-2024-05-13"]["confidence"], "high")
+        self.assertIn("replacement_note", by_match["gpt-4o-2024-05-13"])
+        self.assertEqual(by_match["davinci"]["confidence"], "medium")
         code, out = self.run_cli("scan", str(self.root), "--format", "sarif")
         self.assertEqual(json.loads(out)["version"], "2.1.0")
         code, out = self.run_cli("scan", str(self.root), "--format", "markdown")
+        self.assertIn("gpt-4o-2024-05-13", out)
+        self.assertIn("model(s) in", out)  # grouped summary
+        code, out = self.run_cli("scan", str(self.root), "--format", "markdown", "--group-by", "none")
         self.assertIn("| 🔴 |", out)
+        code, out = self.run_cli("scan", str(self.root), "--group-by", "file")
+        self.assertIn("app.py", out.splitlines()[0])
+        code, out = self.run_cli("scan", str(self.root), "--group-by", "none")
+        self.assertRegex(out, r"app\.py:1:.*error")
 
     def test_cli_info_and_upcoming(self):
         code, out = self.run_cli("info", "gpt-4o-2024-05-13")
@@ -184,6 +211,38 @@ class ScanTests(unittest.TestCase):
         code, out = self.run_cli("upcoming", "--days", "30")
         self.assertIn("gpt-4o-2024-05-13", out)
         self.assertNotIn("2027-06-01", out)
+
+    def test_fix_dry_run_and_write(self):
+        target = self.root / "fixme.py"
+        target.write_text('a = "gpt-4o-2024-05-13"\nmodel = "command"\n')
+        with tempfile.TemporaryDirectory() as d:
+            data = Path(d) / "data.json"
+            data.write_text(json.dumps(RAW))
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = main(["fix", str(target), "--data-file", str(data),
+                             "--today", TODAY.isoformat(), "--dry-run"])
+            out = buf.getvalue()
+        self.assertEqual(code, 0)
+        # dry run prints the diff but changes nothing ...
+        self.assertIn('-a = "gpt-4o-2024-05-13"', out)
+        self.assertIn('+a = "gpt-5"', out)
+        self.assertIn("medium-confidence", out)  # risky "command" skipped
+        self.assertIn("gpt-4o-2024-05-13", target.read_text())
+        with tempfile.TemporaryDirectory() as d:
+            data = Path(d) / "data.json"
+            data.write_text(json.dumps(RAW))
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = main(["fix", str(target), "--data-file", str(data),
+                             "--today", TODAY.isoformat(),
+                             "--replace", "command=command-r",
+                             "--include-risky"])
+            out = buf.getvalue()
+        self.assertEqual(code, 0)
+        # ... while a real run rewrites, honoring --replace.
+        self.assertIn('a = "gpt-5"', target.read_text())
+        self.assertIn('model = "command-r"', target.read_text())
 
     def test_skips_dot_dirs_logs_and_jsonl(self):
         m = matcher()
@@ -204,6 +263,33 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn(".mcp.json", names)  # "command" key, no model context
         self.assertIn("app.py", names)  # real source still scanned
 
+    def test_default_excludes_editor_noise(self):
+        m = matcher()
+        hist = self.root / "History"
+        hist.mkdir()
+        (hist / "snap.yaml").write_text('model: "gpt-4o-2024-05-13"\n')
+        (self.root / "config.yaml.bak").write_text('model: "gpt-4o-2024-05-13"\n')
+        (self.root / "notes.save").write_text('model: "gpt-4o-2024-05-13"\n')
+        (self.root / "real.yaml").write_text('model: "gpt-4o-2024-05-13"\n')
+        found = scan([str(self.root)], m)
+        names = {Path(f.path).name for f in found}
+        self.assertNotIn("snap.yaml", names)
+        self.assertNotIn("config.yaml.bak", names)
+        self.assertNotIn("notes.save", names)
+        self.assertIn("real.yaml", names)
+        found = scan([str(self.root)], m, use_default_excludes=False)
+        names = {Path(f.path).name for f in found}
+        self.assertIn("snap.yaml", names)
+        self.assertIn("config.yaml.bak", names)
+
+    def test_include_hidden(self):
+        m = matcher()
+        hidden = self.root / ".mydir"
+        hidden.mkdir()
+        (hidden / "h.py").write_text('a = "gpt-4o-2024-05-13"\n')
+        self.assertNotIn("h.py", {Path(f.path).name for f in scan([str(self.root)], m)})
+        self.assertIn("h.py", {Path(f.path).name for f in scan([str(self.root)], m, include_hidden=True)})
+
     def test_gitignore_respected(self):
         import shutil
         import subprocess
@@ -221,6 +307,77 @@ class ScanTests(unittest.TestCase):
             sorted(Path(f.path).name for f in scan([str(root)], m, use_gitignore=False)),
             ["ignored.py", "kept.py"],
         )
+
+
+class ConfigBaselineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "a.py").write_text('x = "gpt-4o-2024-05-13"\n')
+        (self.root / "b.py").write_text('x = "claude-2.0"\n')
+        self.datadir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.datadir.cleanup)
+        self.data = Path(self.datadir.name) / "data.json"
+        self.data.write_text(json.dumps(RAW))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_cli(self, *args):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = main([*args, "--data-file", str(self.data), "--today", TODAY.isoformat()])
+        return code, buf.getvalue()
+
+    def test_mini_toml_parser(self):
+        from llm_sunset.config import _mini_toml_parse
+        cfg = _mini_toml_parse(
+            'fail_within = 60\n'
+            'include_docs = true\n'
+            'exclude = ["tests/*",\n  "docs/*",]\n'
+            '[tool.llm-sunset]\n'
+            'providers = ["openai"]\n'
+            '[other]\nfoo = 1\n'
+        )
+        self.assertEqual(cfg["fail_within"], 60)
+        self.assertIs(cfg["include_docs"], True)
+        self.assertEqual(cfg["exclude"], ["tests/*", "docs/*"])
+        self.assertEqual(cfg["providers"], ["openai"])
+        self.assertNotIn("foo", cfg)
+
+    def test_config_file_applies(self):
+        (self.root / ".llm-sunset.toml").write_text('fail_within = 10000\nproviders = ["openai"]\n')
+        old = os.getcwd()
+        os.chdir(self.root)
+        try:
+            code, out = self.run_cli("scan", ".", "--format", "json", "--no-fail")
+        finally:
+            os.chdir(old)
+        names = {f["match"] for f in json.loads(out)["findings"]}
+        # providers=["openai"] from config drops the Anthropic finding
+        self.assertEqual(names, {"gpt-4o-2024-05-13"})
+
+    def test_baseline_roundtrip(self):
+        old = os.getcwd()
+        os.chdir(self.root)
+        try:
+            bl = str(self.root / "base.json")
+            code, _ = self.run_cli("baseline", "--write", bl, ".")
+            self.assertEqual(code, 0)
+            code, out = self.run_cli("scan", ".", "--format", "json", "--no-fail",
+                                     "--baseline", bl)
+            self.assertEqual(json.loads(out)["findings"], [])
+            self.assertEqual(json.loads(out)["suppressed_by_baseline"], 2)
+            # moving a line keeps it baselined; a genuinely new use is reported
+            (self.root / "a.py").write_text('\n\nx = "gpt-4o-2024-05-13"\n')
+            (self.root / "c.py").write_text('x = "gpt-4o-2024-05-13"\n')
+            code, out = self.run_cli("scan", ".", "--format", "json", "--no-fail",
+                                     "--baseline", bl)
+            got = {(f["path"], f["match"]) for f in json.loads(out)["findings"]}
+            self.assertTrue(any(p.endswith("c.py") for p, _ in got))
+            self.assertFalse(any(p.endswith("a.py") for p, _ in got))
+        finally:
+            os.chdir(old)
 
 
 class SnapshotTests(unittest.TestCase):

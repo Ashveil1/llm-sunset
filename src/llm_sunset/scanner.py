@@ -20,6 +20,9 @@ DEFAULT_EXCLUDE_DIRS = {
     ".ruff_cache", ".tox", ".nox", "dist", "build", "out", "target", ".next",
     ".nuxt", ".svelte-kit", ".turbo", ".cache", "coverage", ".idea", ".vscode",
     "site-packages",
+    # Editor local history / backups / caches (VS Code, JetBrains, Vim, ...).
+    "History", ".history", "Backups", "backup", "Cache", "Caches", "CachedData",
+    "GPUCache", "Crashpad", "logs", "tmp", "Temp",
 }
 DEFAULT_EXCLUDE_GLOBS = [
     "*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
@@ -31,6 +34,10 @@ DEFAULT_EXCLUDE_GLOBS = [
     # bulk of false positives (e.g. *.log / *.jsonl transcripts that mention
     # old model names in prose).
     "*.log", "*.log.*", "*.jsonl", "*.ndjson", "*.sarif",
+    # Editor backups, local-history snapshots and merge leftovers: copies of
+    # real files that would otherwise repeat every finding.
+    "*.bak", "*.bak.*", "*.save", "*.orig", "*.rej", "*~", "*.swp", "*.swo",
+    "*.tmp", "*.temp",
 ]
 # Prose files mention old models all the time ("we migrated from gpt-3.5-turbo").
 DOC_GLOBS = ["*.md", "*.mdx", "*.rst", "*.txt", "*.adoc", "CHANGELOG*", "HISTORY*"]
@@ -65,6 +72,14 @@ PLATFORM_PROVIDERS = ("azure", "google vertex", "bedrock")
 _MODEL_KEY_POS_RE = re.compile(
     r"(?i)(?<![A-Za-z])(model|models|engine|deployment)(?![A-Za-z])"
     r"(?:_[A-Za-z0-9_]*|[A-Z][a-z]*)*\s*[\"']?\s*[:=]"
+)
+# Same, but anchored at the end: the match must be the VALUE of that key
+# ('model="X', '"model": "X', 'MODEL_NAME=["X', ...). Backslashes allowed for
+# JSON-in-JSON ('...\"model\": \"X...'). This is the high-precision signal
+# for generic-word IDs on dense/minified lines.
+_MODEL_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z])(model|models|engine|deployment)(?![A-Za-z])"
+    r"(?:_[A-Za-z0-9_]*|[A-Z][a-z]*)*\s*\\?[\"']?\s*[:=]\s*\[?\s*\\?[\"']?$"
 )
 _PROVIDER_HINT_RE = re.compile(
     r"(?i)(?<![A-Za-z])"
@@ -102,18 +117,26 @@ def ctx(line: str, start: int, end: int, radius: int = 200) -> str:
     return line[max(0, start - radius):min(len(line), end + radius)]
 
 
-def _provider_hinted(line: str) -> bool:
-    """True when a provider/SDK name on the line is not just part of a path.
+def _provider_hinted(line: str, start: int) -> bool:
+    """True when a provider/SDK name before the match is real code context.
 
-    ".claude/hooks/notify.sh" is a directory, not a model reference, so a
-    provider word preceded by "." or "/" (or followed by "/") doesn't count.
+    Skipped when the word is just part of a path (".claude/hooks/x.sh") or a
+    model name inside a string ('"model": "claude-4"'): SDK calls, imports and
+    attribute access ('cohere_client.generate(') are unquoted code, while
+    model names in a Claude config file are data.
     "openai/gpt-4" style refs still pass via the "/" structural check below.
     """
-    for m in _PROVIDER_HINT_RE.finditer(line):
+    radius = 200 if len(line) <= 2000 else 50
+    w0 = max(0, start - radius)
+    before = line[w0:start]
+    for m in _PROVIDER_HINT_RE.finditer(before):
         s, e = m.span()
-        before = line[s - 1] if s > 0 else ""
-        after = line[e] if e < len(line) else ""
-        if before in "./\\" or after == "/":
+        ls, le = w0 + s, w0 + e
+        char_before = line[ls - 1] if ls > 0 else ""
+        char_after = line[le] if le < len(line) else ""
+        if char_after == "/" or (char_before and char_before in "./\\"):
+            continue
+        if _within_quotes(line, ls, le):
             continue
         return True
     return False
@@ -130,6 +153,11 @@ def _within_quotes(line: str, start: int, end: int) -> bool:
     return _quoted_span(line, start, end) is not None
 
 
+def _is_model_value(line: str, start: int) -> bool:
+    """True when the match is the value of a model/engine/deployment key."""
+    return bool(_MODEL_VALUE_RE.search(line[max(0, start - 80):start]))
+
+
 def _risky_ok(line: str, start: int, end: int) -> bool:
     """Decide whether a generic-word match on one line is a real model ref."""
     span = _quoted_span(line, start, end)
@@ -144,18 +172,30 @@ def _risky_ok(line: str, start: int, end: int) -> bool:
             j += 1
         if j < len(line) and line[j] == ":":
             return False
-        return bool(_MODEL_KEY_POS_RE.search(line))
+        window = line[max(0, start - 200):min(len(line), end + 200)]
+        return bool(_MODEL_KEY_POS_RE.search(window))
     # Inside quotes: a string followed by ":" is a mapping key, not a model
     # id ("command": "uvx ...", tokenizer vocab "command":2339, ...). The
-    # check must look past the closing quote, not just past the match.
-    j = span.end()
+    # check must look past the closing quote, not just past the match --
+    # including an escaped closing quote for JSON-in-JSON
+    # ('...\"command\": "npx"...').
+    if end < len(line) and line[end] == "\\" and line[end + 1:end + 2] in ("'", '"', "`"):
+        j = end + 2
+    else:
+        j = span.end()
     while j < len(line) and line[j] in " \t":
         j += 1
     if j < len(line) and line[j] == ":":
         return False
-    if _MODEL_KEY_POS_RE.search(ctx(line, start, end)) or _provider_hinted(ctx(line, start, end)):
+    if _is_model_value(line, start):
         return True
-    lowered = ctx(line, start, end).lower()
+    # Otherwise fall back to provider/SDK context *before* the match
+    # ('cohere_client.generate("X")', '"openai/X"'). Context after the match
+    # ('parametrize("command", ["claude", ...])') does not count.
+    if _provider_hinted(line, start):
+        return True
+    radius = 200 if len(line) <= 2000 else 50
+    lowered = line[max(0, start - radius):start].lower()
     if "models/" in lowered or "ft:" in lowered:
         return True
     if re.search(r"[A-Za-z0-9_.-]+/$", line[max(0, start - 30):start]):
@@ -170,6 +210,8 @@ class Finding:
     column: int
     text: str  # exact text matched in the file
     deprecation: Deprecation
+    line_text: str = ""  # full source line of the match (truncated)
+    confidence: str = "high"  # "high": distinctive model ID; "medium": generic word with model context
 
     def status(self, today: date) -> str:
         left = self.deprecation.days_left(today)
@@ -202,6 +244,11 @@ class Matcher:
         self._safe: Set[str] = scannable - self._risky
         self._safe_tokenizable = frozenset(i for i in self._safe if _TOKEN_RE.fullmatch(i))
         self._untokenizable_safe = sorted(i for i in self._safe if not _TOKEN_RE.fullmatch(i))
+
+    def confidence(self, model_id: str) -> str:
+        """Match confidence for agents/scripts: distinctive IDs are high,
+        generic-word IDs (command, ada, ...) that needed model context are medium."""
+        return "high" if model_id in self._safe else "medium"
 
     def find(self, text: str) -> Iterator[tuple]:
         """Yield (offset, matched_id, [Deprecation]) for every hit in text."""
@@ -324,12 +371,17 @@ def iter_files(
     exclude: Sequence[str],
     include_docs: bool,
     use_gitignore: bool = True,
+    use_default_excludes: bool = True,
+    include_hidden: bool = False,
 ) -> Iterator[Path]:
-    globs = list(DEFAULT_EXCLUDE_GLOBS) + list(exclude)
+    globs = list(exclude)
+    if use_default_excludes:
+        globs = list(DEFAULT_EXCLUDE_GLOBS) + globs
     if not include_docs:
         globs += DOC_GLOBS
     file_excluded = _compile_globs(globs)
     dir_excluded = _compile_globs(exclude)
+    skip_dirs = DEFAULT_EXCLUDE_DIRS if use_default_excludes else set()
     explicit: List[Path] = []
     walked: List[Path] = []
     dir_roots: List[Path] = []
@@ -345,8 +397,8 @@ def iter_files(
             rel_dir = os.path.relpath(dirpath, root)
             dirnames[:] = [
                 d for d in dirnames
-                if d not in DEFAULT_EXCLUDE_DIRS
-                and not d.startswith(".")  # tool state dirs: .zcode, .qwen, .cache, ...
+                if d not in skip_dirs
+                and (include_hidden or not d.startswith("."))  # tool state dirs: .zcode, .qwen, .cache, ...
                 and not dir_excluded(os.path.normpath(os.path.join(rel_dir, d)), d)
             ]
             for f in filenames:
@@ -382,8 +434,10 @@ def scan_file(path: Path, matcher: Matcher) -> List[Finding]:
         line = text[start:] if end == -1 else text[start:end]
         if IGNORE_LINE in line:
             continue
+        conf = matcher.confidence(matched)
+        snippet = line.strip()[:500]
         for d in deps:
-            findings.append(Finding(str(path), idx + 1, offset - start + 1, matched, d))
+            findings.append(Finding(str(path), idx + 1, offset - start + 1, matched, d, snippet, conf))
     return findings
 
 
@@ -393,9 +447,11 @@ def scan(
     exclude: Sequence[str] = (),
     include_docs: bool = False,
     use_gitignore: bool = True,
+    use_default_excludes: bool = True,
+    include_hidden: bool = False,
 ) -> List[Finding]:
     out: List[Finding] = []
-    for f in iter_files(paths, exclude, include_docs, use_gitignore):
+    for f in iter_files(paths, exclude, include_docs, use_gitignore, use_default_excludes, include_hidden):
         out.extend(scan_file(f, matcher))
     out.sort(key=lambda x: (x.path, x.line, x.column, x.deprecation.provider))
     return out
