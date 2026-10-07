@@ -76,7 +76,7 @@ Findings appear as inline annotations on the PR, along with a summary table on t
 ```yaml
 repos:
   - repo: https://github.com/Ashveil1/llm-sunset
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: llm-sunset
 ```
