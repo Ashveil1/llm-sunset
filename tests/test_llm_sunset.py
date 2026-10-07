@@ -200,9 +200,29 @@ class ScanTests(unittest.TestCase):
         code, out = self.run_cli("scan", str(self.root), "--format", "markdown", "--group-by", "none")
         self.assertIn("| 🔴 |", out)
         code, out = self.run_cli("scan", str(self.root), "--group-by", "file")
-        self.assertIn("app.py", out.splitlines()[0])
+        self.assertIn("app.py", out)
         code, out = self.run_cli("scan", str(self.root), "--group-by", "none")
-        self.assertRegex(out, r"app\.py:1:.*error")
+        self.assertRegex(out, r"error\s+app\.py:1.*gpt-4o-2024-05-13")
+
+    def test_color_output_is_plain_without_color(self):
+        code, plain = self.run_cli(str(self.root), "--color", "never")
+        code2, colored = self.run_cli(str(self.root), "--color", "always")
+        self.assertNotIn("\033[", plain)
+        self.assertIn("\033[", colored)
+        # Stripping ANSI from the colored run must give the same text.
+        import re as _re
+        # The data-file path is random per call; drop that one line's tail.
+        def head_lines(s):
+            return [l for l in s.splitlines() if "data:" not in l]
+
+        stripped = _re.sub(r"\033\[[0-9;]*m", "", colored)
+        self.assertEqual(head_lines(stripped), head_lines(plain))
+
+    def test_columns_line_up(self):
+        code, out = self.run_cli(str(self.root), "--color", "never")
+        head = out.splitlines()[0]
+        # severity, model, provider and status occupy fixed columns
+        self.assertRegex(head, r"^  error  \S+\s+\S+\s+\S+")
 
     def test_cli_info_and_upcoming(self):
         code, out = self.run_cli("info", "gpt-4o-2024-05-13")

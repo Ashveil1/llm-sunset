@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--baseline", metavar="FILE",
                    help="only report findings not recorded in FILE "
                         "(create it with 'llm-sunset baseline --write FILE')")
+    s.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                   help="colorize output (default: auto, i.e. only when stdout is a terminal; "
+                        "FORCE_COLOR and NO_COLOR are also honoured)")
     _add_scan_options(s)
     _common(s)
 
@@ -157,6 +160,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scan_options(b)
     _common(b)
     return p
+
+
+def _display_root(paths: List[str]) -> Optional[str]:
+    """Show paths relative to the single directory being scanned, when there is one."""
+    dirs = [p for p in paths if os.path.isdir(p)]
+    if len(dirs) == 1 and not any(os.path.isfile(p) for p in paths):
+        return os.path.abspath(dirs[0])
+    return None
 
 
 def cmd_scan(a: argparse.Namespace) -> int:
@@ -193,13 +204,15 @@ def cmd_scan(a: argparse.Namespace) -> int:
         out = report.render_github(findings, today, a.fail_within)
         if out:
             print(out)
-        print(report.render_text(findings, today, a.fail_within, source, group_by=a.group_by))
+        print(report.render_text(findings, today, a.fail_within, source, group_by=a.group_by,
+                                 color_mode="never", root=_display_root(a.paths)))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a", encoding="utf-8") as fh:
                 fh.write(report.render_markdown(findings, today, a.fail_within, source, a.group_by) + "\n")
     else:
-        print(report.render_text(findings, today, a.fail_within, source, group_by=a.group_by))
+        print(report.render_text(findings, today, a.fail_within, source, group_by=a.group_by,
+                                 color_mode=a.color, root=_display_root(a.paths)))
     if baselined:
         print(f"(baseline {a.baseline}: {baselined} known finding(s) hidden)", file=sys.stderr)
 

@@ -19,20 +19,26 @@ pipx run llm-sunset     # no install needed
 
 ```console
 $ llm-sunset
-claude-2.0  (Anthropic, RETIRED on 2025-07-21 (443 days ago))  error
-  replace with: claude-opus-4-8
-  found in: config/models.yaml:3:8
-gpt-4o-2024-05-13  (OpenAI, retires 2026-10-23 (16 days left))  error
-  replace with: gpt-5.6-sol
-  found in: app/llm.py:12:23, app/summarize.py:8:11
+  error  gpt-4o-2024-05-13  OpenAI     in 16d          2026-10-23
+         → gpt-5.6-sol
+         app/llm.py:12:23 · app/summarize.py:8:11
 
-2 model(s) in 3 file(s), 3 location(s): 2 error(s), 0 warning(s)
+  warning  claude-sonnet-4-5  Anthropic  in 54d        2026-11-30
+           → claude-sonnet-5-5
+           worker/.env:2:7
+
+  error  claude-2.0           Anthropic  retired 443d ago  2025-07-21
+         → claude-opus-4-8
+         config/models.yaml:3:8
+
+2 models in 3 files  ·  2 errors  ·  1 warning  ·  fail-within 90d · data: bundled snapshot
 ```
 
 - **Zero dependencies.** Pure Python standard library, Python 3.8+.
 - **Works offline.** Ships with a bundled snapshot; uses live data when it can reach it.
 - **No API keys, and your code never leaves your machine.** It only downloads a public JSON file.
 - **CI-ready.** Comes with a GitHub Action, a pre-commit hook, SARIF output for GitHub code scanning, JSON and Markdown.
+- **Readable output.** Colourised, column-aligned and grouped by model, with the shutdown date, how long you have left and the replacement on one block per model. Auto-detects your terminal width and never spams a 3,000-character line; `--color always|never` and `NO_COLOR`/`FORCE_COLOR` override the default.
 - **Low noise.** It matches exact model IDs (so `gpt-4o-mini` is not reported as `gpt-4o`, and `gpt-4.1` is not reported as `gpt-4`). Generic one-word IDs (`command`, `ada`, `whisper`, `davinci`…) only count next to model context — a `model:`/`engine=` key, a provider or SDK name, or a `provider/` prefix — so everyday words like the `"command"` key in MCP configs don't trigger it. Dot-directories (`.zcode/`, `.qwen/`…), logs (`*.log`, `*.jsonl`), lockfiles and `node_modules` are skipped, and `.gitignore` is respected.
 
 ## Install
@@ -49,6 +55,7 @@ llm-sunset src/ config/             # scan specific paths
 llm-sunset --provider openai        # only OpenAI notices (repeatable)
 llm-sunset --fail-within 30         # only fail on models retiring within 30 days
 llm-sunset --group-by file          # group output by file instead of by model
+llm-sunset --color always           # force color (also honours NO_COLOR / FORCE_COLOR)
 llm-sunset --format json            # also: markdown, sarif, github
 llm-sunset info gpt-4o-2024-05-13   # look up a model
 llm-sunset upcoming --days 90       # every shutdown in the next 90 days
@@ -108,7 +115,7 @@ Findings appear as inline annotations on the PR, along with a summary table on t
 ```yaml
 repos:
   - repo: https://github.com/Ashveil1/llm-sunset
-    rev: v0.3.0
+    rev: v0.3.1
     hooks:
       - id: llm-sunset
 ```
