@@ -1,19 +1,32 @@
 # 🌅 llm-sunset
 
+[![PyPI](https://img.shields.io/pypi/v/llm-sunset)](https://pypi.org/project/llm-sunset/)
+[![CI](https://github.com/Ashveil1/llm-sunset/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashveil1/llm-sunset/actions/workflows/ci.yml)
+[![GitHub Action](https://img.shields.io/badge/GitHub%20Action-ready-blue)](https://github.com/marketplace/actions/llm-sunset)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
+
 **Your app is about to break because an AI provider is shutting down the model it uses. `llm-sunset` tells you before it happens.**
+
+> ⏰ **OpenAI shuts down `gpt-4`, `gpt-3.5-turbo`, `o1`, `o3-mini` and ~30 more models on Oct 23, 2026.** If any of those are hard-coded in your repo, you have 16 days. Run one command and find out.
 
 OpenAI, Anthropic, Google, Groq, Cohere and xAI retire models constantly, often with only a few months' notice. The model ID sits hard-coded in some config file and nobody notices until production starts returning `404 model_not_found`.
 
 `llm-sunset` scans your code, finds every AI model ID, and checks it against a daily-updated list of official deprecation notices.
 
+```bash
+pipx run llm-sunset     # no install needed
+```
+
 ```console
 $ llm-sunset
-app/llm.py:12:23     error    OpenAI model 'gpt-4o-2024-05-13' retires 2026-10-23 (16 days left); replace with: gpt-5.6-sol
-app/summarize.py:8:11  error  OpenAI model 'gpt-3.5-turbo' retires 2026-10-23 (16 days left); replace with: gpt-5.6-terra
-config/models.yaml:3:8 error  Anthropic model 'claude-2.0' RETIRED on 2025-07-21 (443 days ago); replace with: claude-opus-4-8
-worker/.env:2:7        warning Anthropic model 'claude-sonnet-4-5-20250929' retires 2026-11-30 (54 days left)
+claude-2.0  (Anthropic, RETIRED on 2025-07-21 (443 days ago))  error
+  replace with: claude-opus-4-8
+  found in: config/models.yaml:3:8
+gpt-4o-2024-05-13  (OpenAI, retires 2026-10-23 (16 days left))  error
+  replace with: gpt-5.6-sol
+  found in: app/llm.py:12:23, app/summarize.py:8:11
 
-4 finding(s): 3 error(s), 1 warning(s)
+2 model(s) in 3 file(s), 3 location(s): 2 error(s), 0 warning(s)
 ```
 
 - **Zero dependencies.** Pure Python standard library, Python 3.8+.
@@ -118,6 +131,10 @@ If you find a missing or wrong entry, please report it upstream at deprecations-
 ## Support the project
 
 If `llm-sunset` saved you from a production outage, please consider [sponsoring](https://github.com/sponsors/Ashveil1) ❤️
+
+Found a false positive or a model it missed? [Open an issue](https://github.com/Ashveil1/llm-sunset/issues) — false positives are the #1 thing holding this back, and each report makes the tool better for everyone.
+
+Built with the daily-updated feed from [deprecations-rss](https://github.com/deprecations/deprecations-rss). If an entry is wrong or missing, the fix belongs upstream.
 
 ## License
 
